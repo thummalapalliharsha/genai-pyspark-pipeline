@@ -62,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
         trends = SalesAnalytics.monthly_trends(orders_df, products_df)
         _show_and_time(trends, "monthly_trends")
 
+        # Products frequently bought together
+        print("\nProducts frequently bought together:")
+        bought_together = SalesAnalytics.products_frequently_bought_together(orders_df, products_df, n=10)
+        _show_and_time(bought_together, "products_frequently_bought_together")
+
         return 0
 
     except Exception as exc:  # pragma: no cover - top-level runner

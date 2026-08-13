@@ -32,23 +32,23 @@ except Exception:  # pragma: no cover - fallback path when PySpark/JVM missing
     PYS_PARK_AVAILABLE = False
 
 
-    def _is_pyspark_df(obj: Any) -> bool:
-        """Return True if `obj` looks like a PySpark DataFrame.
+def _is_pyspark_df(obj: Any) -> bool:
+    """Return True if `obj` looks like a PySpark DataFrame.
 
-        We avoid relying solely on the `pyspark` import flag because PySpark
-        can be installed even when the JVM isn't configured; instead check
-        for PySpark-specific methods and module hints.
-        """
-        if not PYS_PARK_AVAILABLE:
-            return False
-        # Quick attribute-based detection
-        if hasattr(obj, "withColumn") and hasattr(obj, "groupBy"):
-            return True
-        # Fallback: check module name if available
-        cls = getattr(obj, "__class__", None)
-        if cls is not None and getattr(cls, "__module__", "").startswith("pyspark.sql"):
-            return True
+    We avoid relying solely on the `pyspark` import flag because PySpark
+    can be installed even when the JVM isn't configured; instead check
+    for PySpark-specific methods and module hints.
+    """
+    if not PYS_PARK_AVAILABLE:
         return False
+    # Quick attribute-based detection
+    if hasattr(obj, "withColumn") and hasattr(obj, "groupBy"):
+        return True
+    # Fallback: check module name if available
+    cls = getattr(obj, "__class__", None)
+    if cls is not None and getattr(cls, "__module__", "").startswith("pyspark.sql"):
+        return True
+    return False
 
 
 @dataclass
@@ -224,6 +224,97 @@ class SalesAnalytics:
             return monthly
 
         raise RuntimeError("Unsupported DataFrame type for monthly_trends")
+
+    @staticmethod
+    def products_frequently_bought_together(orders_df: Any, products_df: Any = None, n: int = 10) -> Any:
+        """Find product pairs frequently bought together by the same customer on the same day.
+
+        Groups orders by customer_id and order_date (day), finds all unique product pairs
+        within each customer-day group, normalizes them (treats (A, B) and (B, A) as the same),
+        and counts their frequency across all customer-days.
+
+        Args:
+            orders_df: Orders DataFrame (must contain `customer_id`, `product_id`, `order_date`).
+            products_df: Products DataFrame (not required for this analysis).
+            n: Number of top product pairs to return.
+
+        Returns:
+            DataFrame with columns: `product_id_1`, `product_id_2`, `frequency`, ordered descending by frequency.
+        """
+        # PySpark path
+        if _is_pyspark_df(orders_df):
+            # Extract date from order_date and select relevant columns
+            orders_subset = (
+                orders_df.select("customer_id", "product_id", "order_date")
+                .withColumn("order_day", F.to_date(F.col("order_date")))
+                .distinct()
+            )
+
+            # Self-join: match all products bought by the same customer on the same day
+            # Keep only pairs where p1_id < p2_id to avoid duplicates and self-pairs
+            pairs = (
+                orders_subset.alias("p1")
+                .join(
+                    orders_subset.alias("p2"),
+                    on=(
+                        (F.col("p1.customer_id") == F.col("p2.customer_id"))
+                        & (F.col("p1.order_day") == F.col("p2.order_day"))
+                        & (F.col("p1.product_id") < F.col("p2.product_id"))
+                    ),
+                    how="inner"
+                )
+                .select(
+                    F.col("p1.product_id").alias("product_id_1"),
+                    F.col("p2.product_id").alias("product_id_2")
+                )
+            )
+
+            # Count pair frequencies and order descending
+            result = (
+                pairs.groupBy("product_id_1", "product_id_2")
+                .count()
+                .withColumnRenamed("count", "frequency")
+                .orderBy(F.desc("frequency"))
+                .limit(n)
+            )
+
+            return result
+
+        # pandas fallback
+        if isinstance(orders_df, pd.DataFrame):
+            o = orders_df[["customer_id", "product_id", "order_date"]].copy()
+            
+            # Extract date from order_date
+            o["order_day"] = pd.to_datetime(o["order_date"]).dt.date
+            
+            # Group products by customer_id and order_day
+            cust_day_products = o.groupby(["customer_id", "order_day"])["product_id"].apply(list).reset_index()
+            
+            # Generate all unique pairs for each customer-day
+            pairs_list = []
+            for _, row in cust_day_products.iterrows():
+                products = sorted(set(row["product_id"]))  # Remove duplicates and sort
+                # Generate all pairs (p1, p2) where p1 < p2
+                for i in range(len(products)):
+                    for j in range(i + 1, len(products)):
+                        pairs_list.append((products[i], products[j]))
+            
+            # Count pair frequencies
+            if pairs_list:
+                pairs_df = pd.DataFrame(pairs_list, columns=["product_id_1", "product_id_2"])
+                freq = (
+                    pairs_df.groupby(["product_id_1", "product_id_2"])
+                    .size()
+                    .reset_index(name="frequency")
+                    .sort_values("frequency", ascending=False)
+                    .head(n)
+                )
+                return freq
+            else:
+                # Return empty DataFrame with correct columns
+                return pd.DataFrame(columns=["product_id_1", "product_id_2", "frequency"])
+
+        raise RuntimeError("Unsupported DataFrame type for products_frequently_bought_together")
 
 
 # PySparkRuntimeError may not be importable in some minimal environments; fall back to Exception

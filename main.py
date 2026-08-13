@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate synthetic e-commerce datasets and save as Parquet.")
     parser.add_argument("--customers", type=int, default=100_000, help="Number of customers to generate")
     parser.add_argument("--products", type=int, default=10_000, help="Number of products to generate")
-    parser.add_argument("--orders", type=int, default=1_000_000, help="Number of orders to generate")
+    parser.add_argument("--orders", type=int, default=5_000_000, help="Number of orders to generate")
     parser.add_argument("--seed", type=int, default=None, help="Optional RNG seed")
 
     args = parser.parse_args(argv)
