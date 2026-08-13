@@ -1,0 +1,7 @@
+pyspark
+pandas
+faker
+pytest
+pyarrow
+numpy
+tqdm
